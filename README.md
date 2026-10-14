@@ -103,7 +103,7 @@ Output folders, each with 9 results files:
 
 S band has one folder per UE port (V, H), both from the same ray trace.
 
-**Check every results file before copying.** Each must hold 10000 UEs and the fixed patch (2026-10-14):
+**Check every results file before copying.** Each must hold 10000 UEs. The patch date must be 2026-10-14, except for urban S and urban Ka 10°–70° (2026-09-24; see "Settings worth knowing"):
 
 ```sh
 PYTHONPATH=$PWD:$PWD/site python - <<'EOF'
