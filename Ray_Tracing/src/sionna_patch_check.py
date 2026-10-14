@@ -22,7 +22,8 @@ import sionna.rt
 from sionna.rt.constants import EPSILON_FLOAT
 
 SUPPORTED_VERSION = "1.2.1"
-ARCHIVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sionna_patch")
+# Archive lives at the repo root, one level above src/.
+ARCHIVE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sionna_patch")
 ALLOW_OTHER_VERSION = os.environ.get("RUS_ALLOW_SIONNA_VERSION") == "1"
 
 # The guard expression the epsilon patch installs, for corroborating the constant.
@@ -81,6 +82,32 @@ def _check_epsilon_guard() -> dict:
     return {"ok": True, "cap_m": cap, "reason": "guard capped in spawn_ray_to"}
 
 
+def _check_cone_precision() -> dict:
+    """beam_cone_precision: the cone is sampled from an exact 1 - cos, not a float32 cos.
+
+    Pure Python: at slant/radius = 5000 the helper must keep theta^2/2 to 1e-6,
+    and the sampler must no longer call square_to_uniform_cone with a cosine.
+    """
+    import math
+    rt = _ray_tracing()
+    if "beam_cone_precision" not in (getattr(rt, "__RUS_PATCH__", {}) or {}).get("patches", ()):
+        return {"ok": False, "reason": "__RUS_PATCH__ does not list beam_cone_precision"}
+    fn = getattr(rt, "beam_cone_t_max", None)
+    if fn is None:
+        return {"ok": False, "reason": "ray_tracing.beam_cone_t_max is absent"}
+    th = math.atan(1 / 5000)
+    if abs(fn(th) / (2 * math.sin(th / 2) ** 2) - 1) > 1e-6 or fn(th) <= 0:
+        return {"ok": False, "reason": f"beam_cone_t_max({th:.2e}) = {fn(th):.3e} is wrong"}
+    try:
+        src = inspect.getsource(rt.spawn_ray_from_sources)
+    except (OSError, TypeError):
+        return {"ok": True, "reason": "helper present", "note": "source_unavailable"}
+    code = "\n".join(l.split("#")[0] for l in src.splitlines())
+    if "square_to_uniform_cone(" in code:
+        return {"ok": False, "reason": "spawn_ray_from_sources still samples from cos(beam_angle)"}
+    return {"ok": True, "reason": "cone sampled from exact 1 - cos(beam_angle)"}
+
+
 def _check_manifest() -> dict:
     """Compare installed files against sionna_patch/MANIFEST.json.
 
@@ -109,8 +136,8 @@ def _check_manifest() -> dict:
 
 
 def _cuda_available() -> bool:
-    # ray_tracing.py hardcodes dr.cuda.ad.Float in the cone path, so on an
-    # LLVM-only build the beamforming patch is present but cannot run.
+    # The pipeline is validated on CUDA only; the cone sampler itself is now
+    # variant-agnostic (beam_cone_precision removed the dr.cuda.ad.Float hardcode).
     try:
         import drjit as dr
         return bool(dr.has_backend(dr.JitBackend.CUDA))
@@ -124,15 +151,17 @@ def check() -> dict:
     supported = version == SUPPORTED_VERSION
     beam = _check_beamforming()
     eps = _check_epsilon_guard()
+    cone = _check_cone_precision()
     manifest = _check_manifest()
     rt_patch = getattr(_ray_tracing(), "__RUS_PATCH__", None)
     return {
-        "ok": bool(beam["ok"] and eps["ok"] and manifest["ok"] is not False
+        "ok": bool(beam["ok"] and eps["ok"] and cone["ok"] and manifest["ok"] is not False
                    and (supported or ALLOW_OTHER_VERSION)),
         "sionna_version": version,
         "version_supported": supported,
         "beamforming": beam,
         "epsilon_guard": eps,
+        "beam_cone_precision": cone,
         "manifest": manifest,
         "archive_rev": (rt_patch or {}).get("rev"),
         "cuda_available": _cuda_available(),
@@ -146,7 +175,8 @@ def summary_line(report: dict) -> str:
     cap_s = f"{cap * 1e3:.1f} mm" if cap else "ABSENT"
     return (f"sionna {report['sionna_version']}: beamforming="
             f"{'yes' if report['beamforming']['ok'] else 'NO'} "
-            f"guard={cap_s} cuda={'yes' if report['cuda_available'] else 'no'} "
+            f"guard={cap_s} cone={'exact' if report['beam_cone_precision']['ok'] else 'BROKEN'} "
+            f"cuda={'yes' if report['cuda_available'] else 'no'} "
             f"archive={report['archive_rev'] or '?'}")
 
 
@@ -165,14 +195,15 @@ def require(context: str = "") -> dict:
         print(f"[sionna_patch_check] WARNING: {msg} "
               f"(RUS_ALLOW_SIONNA_VERSION=1 set)")
 
-    broken = [name for name in ("beamforming", "epsilon_guard")
+    broken = [name for name in ("beamforming", "epsilon_guard", "beam_cone_precision")
               if not report[name]["ok"]]
     if broken:
         raise PatchMissingError(
             f"Sionna patches missing: {', '.join(broken)}{where}. "
             + "; ".join(f"{n}: {report[n]['reason']}" for n in broken)
             + ". Re-apply from sionna_patch/ -- see its README. Without the "
-              "epsilon guard the occlusion dead zone corrupts the LoS state.")
+              "epsilon guard the occlusion dead zone corrupts the LoS state; without "
+              "beam_cone_precision long-slant beams collapse onto the scene centre.")
 
     if report["manifest"]["ok"] is False:
         raise PatchMissingError(
@@ -181,8 +212,8 @@ def require(context: str = "") -> dict:
             f"worse than none -- re-copy the whole archive.")
 
     if not report["cuda_available"]:
-        print("[sionna_patch_check] WARNING: no CUDA backend; the beamforming "
-              "cone path hardcodes dr.cuda.ad.Float and will fail.")
+        print("[sionna_patch_check] WARNING: no CUDA backend; the pipeline is "
+              "only validated on CUDA.")
     return report
 
 

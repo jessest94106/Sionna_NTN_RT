@@ -4,3 +4,4 @@ runs/*/results_elev*
 runs/*/checkpoint_elev*
 runs/*/scratch_elev*
 __pycache__/
+smoke/

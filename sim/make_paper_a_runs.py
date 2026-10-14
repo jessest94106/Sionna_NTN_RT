@@ -15,7 +15,7 @@ import numpy as np
 
 from Ray_Tracing.src.utils.variant_manifest import virtual_manifest, lhs_manifest, save_manifest
 
-AARON_CFG = "/home/aaron/Ray_Tracing/Results/sensitivity/phase0/2GHz__baseline/config.json"
+AARON_CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "base_config.json")   # Aaron's 2 GHz sensitivity baseline
 
 
 def p527_soil(f, mv=0.207, sand=41.96, clay=8.53, silt=49.51, rho_s=2.70, T=23.0):
