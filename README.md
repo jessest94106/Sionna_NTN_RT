@@ -21,7 +21,7 @@ Both PCs run the same code from this repo: the runner, the repo modules it impor
 - Linux.
 - NVIDIA GPU with ≥ 10 GB. CUDA is required; the patched ray launcher does not run on CPU.
 - Python 3.12.
-- About 200 GB of free disk for rural (results about 100 GB, plus checkpoints of the same size until deleted).
+- About 220 GB of free disk for rural (results about 110 GB, plus checkpoints of the same size until deleted).
 
 ```sh
 git clone -b dev git@github.com:jessest94106/Sionna_NTN_RT.git paper_A_kit
