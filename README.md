@@ -141,3 +141,4 @@ rsync -av --include='urban_*/' --include='urban_*/results_elev*.pkl' \
 **Settings worth knowing**
 - **Rural solves 5 UEs at a time.** The rough rural ground (10 cm) makes about 0.5M diffuse paths per UE; with 25 UEs per solve, Sionna's 10M-path buffer overflowed and dropped paths without an error.
 - **Patch fixed 2026-10-14.** Before then, the beam-cone width was rounded in float32. That biased diffuse power by about 1–2 dB at 10° and ≤ 0.2 dB elsewhere. Results with `archive_rev` 2026-09-24 have this bias.
+- **Urban results made with the old patch are kept, by decision; they were not rerun.** They are urban S (all elevations) and urban Ka 10°–70°. Urban Ka 80°–90°, urban Ku and all rural use the fixed patch. In post-processing, keep in mind the diffuse-power bias at 10° (and to a lesser degree 20°) in urban S and Ka. Each file's `archive_rev` shows which patch made it. The results-file check in section 3 therefore expects 2026-09-24 for those urban files.
