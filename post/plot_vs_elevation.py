@@ -41,7 +41,8 @@ for row in csv.DictReader(r for r in open(f"{KIT}/post/tr38811_sband.csv") if no
 def panel(ax, scen, metric, f, model_metric, tr_metric, state=None, title=""):
     drawn = False
     for key, label, ls, color, dx in LINES:
-        if (scen, key) not in rt or (metric == "P_LoS" and key != "S_VH"):   # P_LOS is the same with or without diffuse
+        # P_LoS is the same with or without diffuse: drawn once, from the diffuse-off run only when that is all there is
+        if (scen, key) not in rt or (metric == "P_LoS" and key != "S_VH" and (scen, "S_VH") in rt):
             continue
         d = rt[(scen, key)]
         x = [e for e in ELEV if e in d and np.isfinite(d[e][metric])]
