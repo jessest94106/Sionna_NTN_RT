@@ -6,6 +6,7 @@
 B=$(cd "$(dirname "$0")" && pwd)
 R=${RUNS:-$B/runs}
 export PYTHONPATH=$B:$B/site${PYTHONPATH:+:$PYTHONPATH}
+export OPENBLAS_NUM_THREADS=1      # numpy dot on 1e5-path arrays: 64 BLAS threads ran ~30x slower than 1
 mkdir -p $R/logs
 sed -i "s#@ROOT@#$R#g" $R/groups/*.json
 

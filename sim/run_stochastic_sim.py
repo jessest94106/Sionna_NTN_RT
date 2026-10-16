@@ -966,12 +966,10 @@ def _extract_ue(rxd, w, sc, want_raw):
         doppler_mean_hz_td, doppler_rms_hz_td = 0.0, 0.0
 
     if len(t_v) > 0:
-        pwr         = split_by_interaction_type(t_v, a_v, inter_all_v, FREQUENCY,
-                                                 incoherent=False)
-        pwr_inc     = split_by_interaction_type(t_v, a_v, inter_all_v, FREQUENCY,
-                                                 incoherent=True)
+        # P_los, P_nlos and has_los are incoherent in either mode, so one incoherent split serves both
+        pwr = pwr_inc = split_by_interaction_type(t_v, a_v, inter_all_v, FREQUENCY, incoherent=True)
         _, ds        = rms_delay_spread(t_v, a_v)
-        h_total      = complex_channel(t_v, a_v, FREQUENCY)
+        h_total      = complex_channel(t_v, a_v, FREQUENCY) if want_raw else 0j   # only the raw sample keeps it
         P_los        = pwr["P_los"]
         P_nlos       = pwr["P_nlos"]
         has_los_flag = pwr["has_los"]
@@ -1144,7 +1142,7 @@ for scene_idx, entry in enumerate(scene_entries[start_scene:], start=start_scene
     # ── Receivers: every member's UEs, identical ones solved once ──────────────
     # The footprint mask is analytic (no Mitsuba), so it costs ~0.1 s against a
     # ~100 s PathSolver call, and cannot leak the global Mitsuba variant.
-    if not RX_AT_ORIGIN:
+    if not RX_AT_ORIGIN and not RX_EXACT_CLEARANCE:      # sample_street_positions makes its own grid
         _free_xy, _ = sg.free_space_grid(_spec, grid_res=RX_GRID_RES,
                                          margin=RX_MARGIN, clearance=RX_CLEARANCE)
     rx_index, rx_pos, rx_orient = {}, [], []

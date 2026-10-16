@@ -909,10 +909,14 @@ def free_space_grid(spec: SceneSpec, grid_res: float = 2.0,
     XX, YY = np.meshgrid(xs, ys)
     xf, yf = XX.ravel(), YY.ravel()
 
-    occ = np.zeros(xf.shape, dtype=bool)
+    occ = np.zeros(XX.shape, dtype=bool)
     for (cx, cy), s in zip(spec.centers, spec.sides):
         h = s / 2.0 + clearance
-        occ |= (np.abs(xf - cx) <= h) & (np.abs(yf - cy) <= h)
+        # same test as on the full grid, applied only to the cells within one grid step of the footprint
+        i0, i1 = np.searchsorted(xs, [cx - h - grid_res, cx + h + grid_res])
+        j0, j1 = np.searchsorted(ys, [cy - h - grid_res, cy + h + grid_res])
+        occ[j0:j1, i0:i1] |= (np.abs(ys[j0:j1, None] - cy) <= h) & (np.abs(xs[None, i0:i1] - cx) <= h)
+    occ = occ.ravel()
 
     in_zone = ((xf >= xmin + margin) & (xf <= xmax - margin) &
                (yf >= ymin + margin) & (yf <= ymax - margin))
