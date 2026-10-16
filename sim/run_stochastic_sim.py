@@ -127,6 +127,7 @@ cfg = dict(MEMBERS[0]["cfg"])   # shared (non-UE) settings
 # Verify the patched Sionna is loaded and record it in the results, so every
 # run file carries its own provenance. scene_utils re-checks at solve time.
 import Ray_Tracing.src.sionna_patch_check as sionna_patch_check
+from post.raw_moments import raw_moments
 cfg["_SIONNA_PATCH"] = sionna_patch_check.require("run_stochastic_sim")
 for _m in MEMBERS:
     _m["cfg"]["_SIONNA_PATCH"] = cfg["_SIONNA_PATCH"]
@@ -176,6 +177,9 @@ N_RX_PER_SCENE          = int(cfg.get("N_RX_PER_SCENE", 1))
 RX_GRID_RES             = float(cfg.get("PPP_RX_GRID_RES", 2.0))
 RX_MARGIN               = float(cfg.get("PPP_RX_MARGIN", 20.0))
 RX_CLEARANCE            = float(cfg.get("PPP_RX_CLEARANCE", 1.0))
+# stand-off enforced on the final UE position (sg.sample_street_positions); False: on the grid cell only, as the runs
+# before 2026-10-15, where the +-grid_res/2 shift put ~0.5 % of UEs up to 0.5 m inside buildings
+RX_EXACT_CLEARANCE      = bool(cfg.get("PPP_RX_EXACT_CLEARANCE", False))
 # Pin every UE at (0, 0, RX_HEIGHT) instead of sampling free space -- the
 # Chiu & Roy wall ensemble, where the terminal is the scene process's own
 # reference point. Only sensible with N_RX_PER_SCENE = 1.
@@ -269,6 +273,8 @@ SIM_SPECULAR            = bool(cfg.get("SPECULAR_REFLECTION", True))
 SIM_DIFFUSE             = bool(cfg.get("DIFFUSE_REFLECTION", True))
 SIM_DIFFRACTION         = bool(cfg.get("DIFFRACTION", True))
 SIM_EDGE_DIFFRACTION    = bool(cfg.get("EDGE_DIFFRACTION", False))
+# walls + roof of each building in one mesh, so roof edges diffract (False: the runs before 2026-10-15, no roof edges)
+CLOSED_BUILDINGS        = bool(cfg.get("CLOSED_BUILDINGS", False))
 SIM_REFRACTION          = bool(cfg.get("REFRACTION", False))
 BEAMFORMING             = bool(cfg.get("BEAMFORMING", False))
 SCENE_RADIUS            = float(cfg.get("SCENE_RADIUS", 100.0))
@@ -403,7 +409,7 @@ else:
           + ("" if USE_WAYPOINT else " (requires --waypoints_file)"))
 print(f"  max_depth : {MAX_DEPTH}")
 print(f"  LoS={SIM_LOS}  Spec={SIM_SPECULAR}  Diff.refl={SIM_DIFFUSE}  "
-      f"Diffr={SIM_DIFFRACTION}  Refr={SIM_REFRACTION}")
+      f"Diffr={SIM_DIFFRACTION}  Refr={SIM_REFRACTION}  closed buildings={CLOSED_BUILDINGS}")
 if IONOSPHERE_ENABLED:
     print(f"  Ionosphere: Monte Carlo  VTEC~LN(μ={VTEC_MEAN_TECU} TECU, "
           f"σ={VTEC_STD_TECU} TECU)  B_L={B_L_TESLA*1e6:.1f} μT")
@@ -429,7 +435,7 @@ print(f"  Scene ensemble : {N_SCENES} realisations  "
       f"materials={cfg['MATERIAL_NAMES']}")
 for _m in MEMBERS:
     _where = "pinned at the origin" if RX_AT_ORIGIN else \
-        f"uniform over free space (clearance={RX_CLEARANCE} m)"
+        f"uniform over free space (clearance={RX_CLEARANCE} m, {'on the final position' if RX_EXACT_CLEARANCE else 'on the grid cell'})"
     print(f"  Receivers : {_m['name']}: {_m['n_rx']}/scene {_where}, z={_m['rx_h']} m, "
           f"TX={_m['cfg'].get('TX_POL_TYPE', 'V')} RX={_m['cfg'].get('RX_POL_TYPE', 'V')}"
           f"  ->  {_m['total_rx']} total")
@@ -445,7 +451,8 @@ EXTRA_KEYS = ("PG_dB", "n_paths", "P_by_depth", "P_ground", "P_wall", "P_roof",
               "heading_deg", "sat_az_deg", "slant_range_m", "orbit_peak_deg",
               "orbit_leg", "norad_id", "gs_lat", "gs_lon",
               "P_nlos_2us", "DS_ns", "DS_nofloor_ns", "nu_mean_Hz", "sigma_nu_Hz", "omega_rad_s",
-              "los_offaxis_deg", "P_nlos_panel", "DS_panel_ns", "sigma_nu_panel_Hz")
+              "los_offaxis_deg", "P_nlos_panel", "DS_panel_ns", "sigma_nu_panel_Hz",
+              "path_moments", "t0_s", "t_direct_s", "pdp_class")
 # Per-UE result lists, named as save_checkpoint / save_results take them.
 ACC_KEYS = ("nominal_rx_positions", "K_power_ratio", "K_moments", "tau_rms_mean_s",
             "los_probability", "P_los", "P_specular", "P_diffuse", "P_diffraction",
@@ -521,6 +528,7 @@ def _scene_geometry(entry, scene_idx):
         wall_params=manifest["wall_params"], roof_params=manifest["roof_params"],
         ground_params=manifest["ground_params"],
         one_ply_per_building=True, binary_ply=True, verify=verify,
+        closed_buildings=CLOSED_BUILDINGS,
         **{**manifest.get("sample_kwargs", {}), **entry.get("sample_kwargs", {})})
     return xml, spec, d
 
@@ -801,6 +809,23 @@ def _rms(x, w):
     return float(np.sqrt(max(np.sum(w * (x - m) ** 2) / np.sum(w), 0.0)))
 
 
+PDP_EDGES = np.arange(201) * 33e-9     # the geometry-stochastic model's PDP grid: 200 bins of 33 ns
+
+
+def _path_stats(t, a, inter, th_r, t_direct):
+    """Every UE, all paths (before the excess-delay cut): power moments per mechanism (post/raw_moments.py classes) and
+    the non-direct PDP per class [ground mirror, other mirror, diffuse, rest] on PDP_EDGES of excess delay over the
+    geometric direct path, so pooled DS, K and PDP, with or without diffuse, need no saved paths."""
+    rm = raw_moments(dict(taus=t, amps=a, inter_d0=inter[0], inter_all=inter, theta_r=th_r, seed=0, rx_nominal=None,
+                          has_los=False))
+    p, ty, below = np.abs(a) ** 2, inter[0], th_r > np.pi / 2
+    dif = (inter == 2).any(0)                     # a diffuse bounce at any depth makes the path diffuse
+    cls = np.select([dif, (ty == 1) & below, ty == 1], [2, 0, 1], 3)
+    x, nd = np.asarray(t, float) - t_direct, ty != IT_NONE
+    pdp = np.stack([np.histogram(x[nd & (cls == c)], PDP_EDGES, weights=p[nd & (cls == c)])[0] for c in range(4)])
+    return {"path_moments": rm["mom"].tolist(), "t0_s": rm["t0"], "pdp_class": pdp.astype(np.float32)}
+
+
 def _paper_a_metrics(t, a, inter, th_t, ph_t, th_r, ph_r, sc):
     """Per-UE values Paper A needs from the paths, so the paths need not be saved.
     Paths with excess delay > MAX_EXCESS_NS are dropped; all sums are path powers."""
@@ -814,8 +839,11 @@ def _paper_a_metrics(t, a, inter, th_t, ph_t, th_r, ph_r, sc):
     los_dir /= rng_m
     v = sc["v_sat"]
     out["omega_rad_s"] = float(np.linalg.norm(v - (v @ los_dir) * los_dir) / rng_m)
+    out["t_direct_s"] = rng_m / constants.c
+    out.update({"path_moments": np.zeros((6, 3)).tolist(), "t0_s": nan, "pdp_class": np.zeros((4, 200), np.float32)})
     if len(t) == 0:
         return out
+    out.update(_path_stats(t, a, inter, th_r, out["t_direct_s"]))
     keep = (t - t.min()) <= MAX_EXCESS_NS * 1e-9
     t, p = t[keep], np.abs(a[keep]) ** 2
     direct = (inter[:, keep] == IT_NONE).all(axis=0)
@@ -1022,6 +1050,8 @@ def _extract_ue(rxd, w, sc, want_raw):
             "taus"         : t_v.copy(),
             "amps"         : a_v.copy(),
             "inter_d0"     : inter_all_v[0].copy() if len(t_v) > 0 else np.array([], dtype=int),
+            # every bounce's type (uint8), so post can tell a mirror-first path with a later diffuse bounce
+            "inter_all"    : inter_all_v.astype(np.uint8),
             # Per-path geometry, index-aligned with taus/amps. Departure
             # angles give the residual Doppler in float64 (differencing
             # Sionna's own per-path Doppler against the ~40 kHz LoS shift
@@ -1136,8 +1166,12 @@ for scene_idx, entry in enumerate(scene_entries[start_scene:], start=start_scene
             # makes per-UE statistics pairable across the sweep; seeding off the run RNG
             # would silently resample them per angle and destroy the pairing.
             _rx_rng = np.random.default_rng(RNG_SEED + 7919 * int(entry["seed"]))
-            pos = sample_rx_positions(_free_xy, m["n_draw"], _rx_h,
-                                      rng=_rx_rng, grid_res=RX_GRID_RES).tolist()[:m["n_rx"]]
+            if RX_EXACT_CLEARANCE:
+                pos = sg.sample_street_positions(_spec, m["n_draw"], _rx_h, _rx_rng, grid_res=RX_GRID_RES,
+                                                 margin=RX_MARGIN, clearance=RX_CLEARANCE).tolist()[:m["n_rx"]]
+            else:
+                pos = sample_rx_positions(_free_xy, m["n_draw"], _rx_h,
+                                          rng=_rx_rng, grid_res=RX_GRID_RES).tolist()[:m["n_rx"]]
         orient = [float(v) for v in mcfg.get("RX_ORIENTATION_DEG", [0.0, 0.0, 0.0])]
         idx = []
         for p in pos:

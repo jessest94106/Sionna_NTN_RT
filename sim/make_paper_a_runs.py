@@ -1,6 +1,6 @@
 """Scene lists, configs and solve groups for the Paper A main sweep (plan §9.0).
 
-    jesse/env/py312 jesse/sim/make_paper_a_runs.py OUT_DIR [--smoke]
+    jesse/env/py312 jesse/sim/make_paper_a_runs.py OUT_DIR [--smoke] [--scenario urban|rural] [--bands S Ku Ka]
 
 Writes OUT_DIR/<scenario>_<band>[_<pol>]/{config.json, manifest.pkl} and
 OUT_DIR/groups/<scenario>_<band>.json (one solve group per scenario and band;
@@ -45,8 +45,9 @@ def p527_soil(f, mv=0.207, sand=41.96, clay=8.53, silt=49.51, rho_s=2.70, T=23.0
 
 
 def mat(a, b, c, d, s=0.4):
+    # diffuse lobe around the mirror direction, alpha_R = 1 (decision 2026-10-15; the runs before used "lambertian")
     return dict(a=a, b=b, c=c, d=d, scattering_coefficient=s, xpd_coefficient=0.0,
-                thickness=2.0, scattering_pattern="lambertian")
+                thickness=2.0, scattering_pattern="directive", alpha_r=1)
 
 
 CONCRETE = (5.24, 0.0, 0.0462, 0.7822)     # P.2040-3 Table 3
@@ -68,6 +69,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--smoke", action="store_true", help="1 scene, 50 UEs")
+    ap.add_argument("--scenario", choices=list(SCENARIOS), help="only this scenario (default: both)")
+    ap.add_argument("--bands", nargs="+", choices=list(BANDS), default=list(BANDS))
     args = ap.parse_args()
     n_scenes, n_rx = (1, 50) if args.smoke else (10, 1000)
     with open(AARON_CFG) as f:
@@ -75,6 +78,8 @@ def main():
     os.makedirs(os.path.join(args.out, "groups"), exist_ok=True)
 
     for sname, s in SCENARIOS.items():
+        if args.scenario and sname != args.scenario:
+            continue
         sk = dict(Lx=2000.0, Ly=2000.0, cell_res=40.0, alpha=s["alpha"], points_per_cell=4,
                   gamma=s["gamma"], h_min=s["h_min"], h_max=120.0, max_fill=0.8, min_side=5.0)
         base = virtual_manifest(n_scenes, sk, base_seed=s["seed"], primitive="block",
@@ -90,6 +95,8 @@ def main():
             "cfg.SCENE_EAST_HEADING_DEG": (0.0, 90.0),
         }, seed=s["seed"])
         for bname, (freq, panel, pols) in BANDS.items():
+            if bname not in args.bands:
+                continue
             man = copy.deepcopy(lhs)
             man["ground_params"] = mat(*s["ground"](freq / 1e9), s=0.0)
             members = []
@@ -103,7 +110,10 @@ def main():
                            RX_CHUNK=s["rx_chunk"], TX_POL_TYPE="RHCP", RX_POL_TYPE=pol, TX_AZIMUTH_DEG=0.0,
                            IONOSPHERE_ENABLED=False, ATMOSPHERE_ENABLED=False, DOPPLER_ENABLED=False,
                            RAW_SAVE_INTERVAL=50, CHECKPOINT_INTERVAL=1, GROUND_RETRY_MAX=0,
-                           UE_PANEL_N=panel, DS_FLOOR_DB=40.0, MAX_EXCESS_NS=2000.0)
+                           UE_PANEL_N=panel, DS_FLOOR_DB=40.0, MAX_EXCESS_NS=2000.0,
+                           # 2026-10-15: roof edges diffract (walls + roof in one mesh); the 0.5 m stand-off holds
+                           # for the final UE position (no UE inside a building)
+                           CLOSED_BUILDINGS=True, PPP_RX_EXACT_CLEARANCE=True)
                 with open(os.path.join(d, "config.json"), "w") as f:
                     json.dump(cfg, f, indent=2)
                 save_manifest(man, os.path.join(d, "manifest.pkl"))

@@ -490,8 +490,13 @@ def write_sionna_scene(
     one_ply_per_building: bool = True,
     add_sensor: bool = True,
     binary_ply: bool = False,
+    closed_buildings: bool = False,
 ) -> str:
-    """Emit ``<out_dir>/<scene_name>.xml`` + ``<out_dir>/meshes/*.ply``."""
+    """Emit ``<out_dir>/<scene_name>.xml`` + ``<out_dir>/meshes/*.ply``.
+
+    ``closed_buildings``: walls, bottom and roof of each building in ONE mesh with the building material, so the roof
+    edges are wedges and diffract. Otherwise (the Paper A runs before 2026-10-15) walls and roof are separate meshes
+    and Sionna treats the roof edges as open mesh borders, which diffract only with edge_diffraction=True."""
     wall_params   = dict(DEFAULT_WALL_PARAMS)   if wall_params   is None else dict(wall_params)
     roof_params   = dict(DEFAULT_ROOF_PARAMS)   if roof_params   is None else dict(roof_params)
     ground_params = dict(DEFAULT_GROUND_PARAMS) if ground_params is None else dict(ground_params)
@@ -522,7 +527,15 @@ def write_sionna_scene(
     shapes.append(("ground", "meshes/ground.ply", ground_material))
 
     # ---- buildings (walls+bottom and roof are separate meshes/materials) --
-    if one_ply_per_building:
+    if closed_buildings:
+        # roof on the walls' top vertices 4-7 (both primitives list 4 bottom then 4 top corners, CCW): every roof edge
+        # is shared with a wall face, with consistent outward winding
+        for b in range(spec.n_buildings):
+            wv, wf, _, _ = _primitive_meshes(spec, b)
+            fn = f"building_{b:05d}.ply"
+            write_ply(os.path.join(mesh_dir, fn), wv, np.r_[wf, [[4, 5, 6], [4, 6, 7]]], binary=binary_ply)
+            shapes.append((f"building_{b:05d}", f"meshes/{fn}", building_material))
+    elif one_ply_per_building:
         for b in range(spec.n_buildings):
             wv, wf, rv, rf = _primitive_meshes(spec, b)
             wfn = f"building_{b:05d}_walls.ply"
@@ -695,6 +708,7 @@ def generate_scene_streaming(out_dir: str, seed: int, *,
                              one_ply_per_building: bool = False,
                              binary_ply: bool = True,
                              verify: bool = False,
+                             closed_buildings: bool = False,
                              **sample_kwargs) -> tuple:
     """Generate ONE scene for immediate use, then discard: the unit of work for a
 scene-outer sweep (run_chiu_sweep.py).
@@ -709,6 +723,7 @@ scene-outer sweep (run_chiu_sweep.py).
         one_ply_per_building=one_ply_per_building,
         binary_ply=binary_ply,
         add_sensor=False,          # nothing renders a streamed scene
+        closed_buildings=closed_buildings,
     )
     if verify:
         verify_scene(xml_path, spec)
@@ -848,6 +863,34 @@ generated scene.
         radius=float(meta.get("radius", 0.0)),
         **{k: npz[k] for k in npz.files},
     )
+
+
+def inside_footprints(xy: np.ndarray, spec: SceneSpec, clearance: float = 0.0) -> np.ndarray:
+    """[N] True where a point lies inside a footprint grown by ``clearance`` (same square rule as free_space_grid)."""
+    xy = np.asarray(xy, float)[:, :2]
+    h = spec.sides / 2.0 + clearance
+    return np.any((np.abs(xy[:, None, 0] - spec.centers[None, :, 0]) <= h) &
+                  (np.abs(xy[:, None, 1] - spec.centers[None, :, 1]) <= h), axis=1)
+
+
+def sample_street_positions(spec: SceneSpec, n: int, rx_height: float, rng: np.random.Generator,
+                            grid_res: float = 2.0, margin: float = 20.0, clearance: float = 0.5) -> np.ndarray:
+    """[n, 3] UE positions uniform over the street at least ``clearance`` from every footprint.
+
+    Same draw as free_space_grid + sample_rx_positions (a random grid cell, then a uniform shift within it), but the
+    stand-off is enforced on the final position: cells are kept if their square can reach the allowed area, and a
+    point that lands inside a footprint or closer than ``clearance`` is drawn again. (Applying the stand-off to the
+    cell centres only, as before, let the +-grid_res/2 shift carry UEs up to grid_res/2 - clearance into buildings.)
+    ponytail: block primitive only (axis-aligned square footprints).
+    """
+    free, _ = free_space_grid(spec, grid_res=grid_res, margin=margin, clearance=clearance - grid_res / 2.0)
+    pos = np.empty((n, 2))
+    todo = np.arange(n)
+    while len(todo):
+        p = free[rng.choice(len(free), size=len(todo))] + rng.uniform(-grid_res / 2, grid_res / 2, (len(todo), 2))
+        pos[todo] = p
+        todo = todo[inside_footprints(p, spec, clearance)]
+    return np.column_stack([pos, np.full(n, rx_height)])
 
 
 def free_space_grid(spec: SceneSpec, grid_res: float = 2.0,
