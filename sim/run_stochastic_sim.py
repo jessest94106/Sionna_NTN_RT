@@ -1229,6 +1229,14 @@ for scene_idx, entry in enumerate(scene_entries[start_scene:], start=start_scene
             print(f"    OOM solving {j - i} receivers; retrying in chunks of {chunk}")
             sys.stdout.flush()
             continue
+        if cand.get("n", 0) >= cand.get("cap", 1) and j - i > 1:
+            # candidate buffer full: paths were dropped. Redo this chunk at half the size (kept for later chunks).
+            del res
+            _free_gpu()
+            chunk = chunk_ok = (j - i + 1) // 2
+            print(f"    candidate cap hit solving {j - i} receivers; retrying in chunks of {chunk}")
+            sys.stdout.flush()
+            continue
         per_rx[i:j] = res
         if cand.get("n", 0) >= cand.get("cap", 1):
             n_cap_hits += 1

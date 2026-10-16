@@ -57,7 +57,7 @@ WOOD = (1.99, 0.0, 0.0047, 1.0718)
 SCENARIOS = {
     "urban": dict(alpha=0.30, beta=500.0, gamma=14.52, h_min=4.0, rough=0.01, seed=1000, rx_chunk=25,
                   wall=CONCRETE, roof=CONCRETE, ground=lambda f: CONCRETE),
-    "rural": dict(alpha=0.08, beta=525.0, gamma=4.90, h_min=3.0, rough=0.10, seed=2000, rx_chunk=5,     # rough ground: ~0.5M diffuse paths per UE
+    "rural": dict(alpha=0.08, beta=525.0, gamma=4.90, h_min=3.0, rough=0.10, seed=2000, rx_chunk=15,    # rough ground: ~0.5M diffuse paths per UE; a full candidate buffer halves the chunk
                   wall=WOOD, roof=WOOD,     # ground per band as (a, b, c, d) = (eps_r, 0, sigma, 0)
                   ground=lambda f: (p527_soil(f)[0], 0.0, p527_soil(f)[1], 0.0)),
 }
