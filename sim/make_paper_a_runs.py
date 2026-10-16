@@ -44,10 +44,11 @@ def p527_soil(f, mv=0.207, sand=41.96, clay=8.53, silt=49.51, rho_s=2.70, T=23.0
     return float(er), float(ei * f / 18)
 
 
-def mat(a, b, c, d, s=0.4):
-    # diffuse lobe around the mirror direction, alpha_R = 1 (decision 2026-10-15; the runs before used "lambertian")
+def mat(a, b, c, d, s=0.4, alpha_r=1):
+    # diffuse lobe around the mirror direction, width alpha_R per scenario (decision 2026-10-15; the runs before used
+    # "lambertian")
     return dict(a=a, b=b, c=c, d=d, scattering_coefficient=s, xpd_coefficient=0.0,
-                thickness=2.0, scattering_pattern="directive", alpha_r=1)
+                thickness=2.0, scattering_pattern="directive", alpha_r=alpha_r)
 
 
 CONCRETE = (5.24, 0.0, 0.0462, 0.7822)     # P.2040-3 Table 3
@@ -55,9 +56,9 @@ WOOD = (1.99, 0.0, 0.0047, 1.0718)
 
 # §9.0 rows 10-21. gamma keeps the truncated mean at 18.8 m / 7 m.
 SCENARIOS = {
-    "urban": dict(alpha=0.30, beta=500.0, gamma=14.52, h_min=4.0, rough=0.01, seed=1000, rx_chunk=25,
+    "urban": dict(alpha=0.30, beta=500.0, gamma=14.52, h_min=4.0, rough=0.01, seed=1000, rx_chunk=25, alpha_r=10,
                   wall=CONCRETE, roof=CONCRETE, ground=lambda f: CONCRETE),
-    "rural": dict(alpha=0.08, beta=525.0, gamma=4.90, h_min=3.0, rough=0.10, seed=2000, rx_chunk=5,     # rough ground: ~0.5M diffuse paths per UE
+    "rural": dict(alpha=0.08, beta=525.0, gamma=4.90, h_min=3.0, rough=0.10, seed=2000, rx_chunk=5, alpha_r=1,     # rough ground: ~0.5M diffuse paths per UE
                   wall=WOOD, roof=WOOD,     # ground per band as (a, b, c, d) = (eps_r, 0, sigma, 0)
                   ground=lambda f: (p527_soil(f)[0], 0.0, p527_soil(f)[1], 0.0)),
 }
@@ -85,8 +86,8 @@ def main():
         base = virtual_manifest(n_scenes, sk, base_seed=s["seed"], primitive="block",
                                 building_material="itu_concrete" if sname == "urban" else "itu_wood",
                                 roof_material="itu_brick", ground_material="itu_plasterboard",
-                                wall_params=mat(*s["wall"]), roof_params=mat(*s["roof"]),
-                                ground_params=mat(*s["ground"](2.0), s=0.0))
+                                wall_params=mat(*s["wall"], alpha_r=s["alpha_r"]), roof_params=mat(*s["roof"], alpha_r=s["alpha_r"]),
+                                ground_params=mat(*s["ground"](2.0), s=0.0, alpha_r=s["alpha_r"]))
         lhs = lhs_manifest(base, {
             "geo.alpha": (0.95 * s["alpha"], 1.05 * s["alpha"]),
             "geo.beta": (0.95 * s["beta"], 1.05 * s["beta"]),
@@ -98,7 +99,7 @@ def main():
             if bname not in args.bands:
                 continue
             man = copy.deepcopy(lhs)
-            man["ground_params"] = mat(*s["ground"](freq / 1e9), s=0.0)
+            man["ground_params"] = mat(*s["ground"](freq / 1e9), s=0.0, alpha_r=s["alpha_r"])
             members = []
             for pol in pols:
                 name = f"{sname}_{bname}" + (f"_{pol}" if len(pols) > 1 else "")
